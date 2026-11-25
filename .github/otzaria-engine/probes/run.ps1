@@ -98,11 +98,18 @@ foreach ($variant in $variants) {
         Tee-Object -FilePath (Join-Path $artifact "$variant-comparison.log")
 }
 
-# Validate that the large case ran for both patched variants and report its size.
+# Confirm that both large paragraph scenarios ran on each patched engine.
 foreach ($variant in $variants) {
     $report = Get-Content (Join-Path $artifact "$variant.json") -Raw | ConvertFrom-Json
     if ($report.large.characters -ne 1985804 -or $report.large.lineCount -lt 1 -or $report.large.layoutMicros -lt 1) {
-        throw "Missing or incomplete large paragraph evidence for $variant"
+        throw "Missing or incomplete large mixed-style paragraph evidence for $variant"
     }
-    Write-Output "$variant large paragraph ($($report.large.characters) characters): $($report.large.layoutMicros) us"
+    $singleRun = $report.largeSingleRun
+    if ($singleRun.characters -ne 1985800 -or $singleRun.lineCount -lt 1 -or
+        $singleRun.layoutMicros -lt 1 -or $singleRun.widthRelayoutLineCount -lt 1 -or
+        $singleRun.widthRelayoutMicros -lt 1) {
+        throw "Missing or incomplete large justified paragraph evidence for $variant"
+    }
+    Write-Output "$variant large mixed paragraph ($($report.large.characters) characters): $($report.large.layoutMicros) us"
+    Write-Output "$variant large justified paragraph ($($singleRun.characters) characters): $($singleRun.layoutMicros) us; width re-layout $($singleRun.widthRelayoutMicros) us"
 }

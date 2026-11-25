@@ -1,8 +1,8 @@
 // Use as lib/main.dart in a minimal Flutter Windows release app. Pass an
 // absolute output path when launching the executable. Compare "geometry" from
 // two runs with the same SDK and fonts, then compare "layoutMicros" separately.
-// Pass --large after the output path on the fully patched engine to measure a
-// paragraph near the size reported in issue #5906.
+// Pass --large after the output path on the fully patched engine to measure
+// mixed-direction and single-run paragraphs near the size reported in #5906.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -42,6 +42,13 @@ Map<String, Object> probeParagraphStyleLookup({bool includeLarge = false}) {
       includeGeometry: true,
       maxLines: 1,
     ),
+    for (final direction in [ui.TextDirection.ltr, ui.TextDirection.rtl])
+      _measureSingleRun(
+        groups: 60,
+        direction: direction,
+        includeGeometry: true,
+        measureRelayout: true,
+      ),
   ].map((sample) => sample['geometry']).toList();
 
   return {
@@ -51,9 +58,27 @@ Map<String, Object> probeParagraphStyleLookup({bool includeLarge = false}) {
         for (final groups in [4000, 8000, 16000])
           _measure(groups: groups, letterSpacing: letterSpacing),
     ],
+    'singleRunScaling': {
+      'ltr': _measureSingleRun(
+        groups: 16000,
+        direction: ui.TextDirection.ltr,
+        measureRelayout: true,
+      ),
+      'rtl': _measureSingleRun(
+        groups: 15200,
+        direction: ui.TextDirection.rtl,
+        measureRelayout: true,
+      ),
+    },
     if (includeLarge)
       // 1,985,804 UTF-16 code units, close to the 1,985,795 in the report.
       'large': _measure(groups: 104516, letterSpacing: 0.25),
+    if (includeLarge)
+      'largeSingleRun': _measureSingleRun(
+        groups: 99290,
+        direction: ui.TextDirection.rtl,
+        measureRelayout: true,
+      ),
   };
 }
 
@@ -115,51 +140,118 @@ Map<String, Object> _measure({
     textLength += start.length + match.length + end.length;
   }
 
-  final paragraph = builder.build();
+  return _reportLayout(
+    builder.build(),
+    groups: groups,
+    textLength: textLength,
+    letterSpacing: letterSpacing,
+    includeGeometry: includeGeometry,
+  );
+}
+
+Map<String, Object> _measureSingleRun({
+  required int groups,
+  required ui.TextDirection direction,
+  bool includeGeometry = false,
+  bool measureRelayout = false,
+}) {
+  // One font, one direction and no hard breaks. The same shaping run continues
+  // across the wrapped and justified lines, including after a width change.
+  final fragment = direction == ui.TextDirection.rtl
+      ? 'אוצריא מילים נוספות '
+      : 'alpha beta word fx ';
+  final text = List.filled(groups, fragment).join();
+  final builder = ui.ParagraphBuilder(
+    ui.ParagraphStyle(
+      textDirection: direction,
+      textAlign: ui.TextAlign.justify,
+      fontFamily: 'Arial',
+      fontSize: 16,
+    ),
+  )..addText(text);
+  return _reportLayout(
+    builder.build(),
+    groups: groups,
+    textLength: text.length,
+    letterSpacing: 0.0,
+    includeGeometry: includeGeometry,
+    measureRelayout: measureRelayout,
+  );
+}
+
+Map<String, Object> _reportLayout(
+  ui.Paragraph paragraph, {
+  required int groups,
+  required int textLength,
+  required double letterSpacing,
+  required bool includeGeometry,
+  bool measureRelayout = false,
+}) {
   try {
     final stopwatch = Stopwatch()..start();
     paragraph.layout(const ui.ParagraphConstraints(width: 600));
     stopwatch.stop();
     final lines = paragraph.computeLineMetrics();
-    return {
+    final geometry = includeGeometry
+        ? _geometry(paragraph, lines, textLength)
+        : null;
+    final report = <String, Object>{
       'groups': groups,
       'characters': textLength,
       'letterSpacing': letterSpacing,
       'layoutMicros': stopwatch.elapsedMicroseconds,
       'lineCount': lines.length,
-      if (includeGeometry)
-        'geometry': {
-          'height': paragraph.height,
-          'longestLine': paragraph.longestLine,
-          'minIntrinsicWidth': paragraph.minIntrinsicWidth,
-          'maxIntrinsicWidth': paragraph.maxIntrinsicWidth,
-          'exceededMaxLines': paragraph.didExceedMaxLines,
-          'lines': [
-            for (final line in lines)
-              [
-                line.hardBreak,
-                line.left,
-                line.width,
-                line.height,
-                line.baseline,
-                line.ascent,
-                line.descent,
-              ],
-          ],
-          'selectionBoxes': paragraph
-              .getBoxesForRange(1, textLength - 1)
-              .map(_box)
-              .toList(),
-          'placeholderBoxes': paragraph
-              .getBoxesForPlaceholders()
-              .map(_box)
-              .toList(),
-        },
+      'geometry': ?geometry,
     };
+    if (measureRelayout) {
+      stopwatch
+        ..reset()
+        ..start();
+      paragraph.layout(const ui.ParagraphConstraints(width: 624));
+      stopwatch.stop();
+      final reflowedLines = paragraph.computeLineMetrics();
+      report['widthRelayoutMicros'] = stopwatch.elapsedMicroseconds;
+      report['widthRelayoutLineCount'] = reflowedLines.length;
+      geometry?['widthRelayout'] = _geometry(
+        paragraph,
+        reflowedLines,
+        textLength,
+      );
+    }
+    return report;
   } finally {
     paragraph.dispose();
   }
 }
+
+Map<String, Object> _geometry(
+  ui.Paragraph paragraph,
+  List<ui.LineMetrics> lines,
+  int textLength,
+) => {
+  'height': paragraph.height,
+  'longestLine': paragraph.longestLine,
+  'minIntrinsicWidth': paragraph.minIntrinsicWidth,
+  'maxIntrinsicWidth': paragraph.maxIntrinsicWidth,
+  'exceededMaxLines': paragraph.didExceedMaxLines,
+  'lines': [
+    for (final line in lines)
+      [
+        line.hardBreak,
+        line.left,
+        line.width,
+        line.height,
+        line.baseline,
+        line.ascent,
+        line.descent,
+      ],
+  ],
+  'selectionBoxes': paragraph
+      .getBoxesForRange(1, textLength - 1)
+      .map(_box)
+      .toList(),
+  'placeholderBoxes': paragraph.getBoxesForPlaceholders().map(_box).toList(),
+};
 
 List<Object> _box(ui.TextBox box) => [
   box.left,
