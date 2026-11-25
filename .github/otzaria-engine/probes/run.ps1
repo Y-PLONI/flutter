@@ -29,7 +29,13 @@ if ($engineRevision -ne $env:OTZARIA_ENGINE_VERSION) {
 }
 $version | Set-Content (Join-Path $artifact 'flutter-version.json')
 
-& $flutter create --empty --platforms=windows --project-name=paragraph_probe $probe
+# Flutter recognizes the surrounding Flutter checkout as its own repository.
+Push-Location $env:OTZARIA_BUILD_ROOT
+try {
+    & $flutter create --empty --platforms=windows --project-name=paragraph_probe $probe 2>&1 |
+        Tee-Object -FilePath (Join-Path $artifact 'app-create.log')
+}
+finally { Pop-Location }
 Copy-Item (Join-Path $PSScriptRoot 'paragraph_style_lookup_probe.dart') (Join-Path $probe 'lib/main.dart') -Force
 Push-Location $probe
 try {
