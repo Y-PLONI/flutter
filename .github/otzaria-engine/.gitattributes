@@ -1,0 +1,2 @@
+*.patch text eol=lf -whitespace
+*.ps1 text eol=lf
