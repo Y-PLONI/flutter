@@ -1,20 +1,26 @@
 // Use as lib/main.dart in a minimal Flutter Windows release app. Pass an
 // absolute output path when launching the executable. Compare "geometry" from
 // two runs with the same SDK and fonts, then compare "layoutMicros" separately.
+// Pass --large after the output path on the fully patched engine to measure a
+// paragraph near the size reported in issue #5906.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 void main(List<String> args) {
-  final outputPath = args.single;
+  final (outputPath, includeLarge) = switch (args) {
+    [final path] => (path, false),
+    [final path, '--large'] => (path, true),
+    _ => throw ArgumentError('Expected an output path and optional --large.'),
+  };
   File(outputPath).writeAsStringSync(
-    jsonEncode(probeParagraphStyleLookup()),
+    jsonEncode(probeParagraphStyleLookup(includeLarge: includeLarge)),
     flush: true,
   );
   exit(0);
 }
 
-Map<String, Object> probeParagraphStyleLookup() {
+Map<String, Object> probeParagraphStyleLookup({bool includeLarge = false}) {
   final geometry = [
     _measure(
       groups: 48,
@@ -45,6 +51,9 @@ Map<String, Object> probeParagraphStyleLookup() {
         for (final groups in [4000, 8000, 16000])
           _measure(groups: groups, letterSpacing: letterSpacing),
     ],
+    if (includeLarge)
+      // 1,985,804 UTF-16 code units, close to the 1,985,795 in the report.
+      'large': _measure(groups: 104516, letterSpacing: 0.25),
   };
 }
 
@@ -76,6 +85,7 @@ Map<String, Object> _measure({
     letterSpacing: includeGeometry ? 0.0 : letterSpacing,
     wordSpacing: includeGeometry ? wordSpacing + 2.0 : wordSpacing,
     fontFamily: includeGeometry ? 'Times New Roman' : null,
+    fontFamilyFallback: includeGeometry ? const ['Segoe UI Emoji'] : null,
     fontFeatures: includeGeometry
         ? const [ui.FontFeature.enable('liga')]
         : null,
@@ -85,7 +95,7 @@ Map<String, Object> _measure({
   var textLength = 0;
   for (var group = 0; group < groups; group++) {
     final start = 'שָׁלוֹם abc ${group % 10} ';
-    final match = includeGeometry ? 'office עָוֹלָם' : 'עולם';
+    final match = includeGeometry ? 'office עָוֹלָם \u{1f52c}' : 'עולם';
     final end = group % 7 == 6 ? '\n' : ' ';
     builder
       ..pushStyle(normal)

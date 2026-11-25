@@ -2,6 +2,7 @@ Prevent repeated paragraph style scans for long styled text (#5906).
 
 Base Skia revision: 8df24be66531469e576a806749a0202ae26b8d08
 The findAllBlocks hunk backports Skia commit 8a256a988834b3281b9b851ee160b57c68a56cfc.
+The OneLineShaper hunk backports Skia commit b7194156a09d690a329c7afe01a98b4223a9f6ed.
 Apply from the root of the Skia checkout.
 --- a/modules/skparagraph/src/ParagraphImpl.cpp
 +++ b/modules/skparagraph/src/ParagraphImpl.cpp
@@ -81,3 +82,14 @@ Apply from the root of the Skia checkout.
  }
 
  TextLine& ParagraphImpl::addLine(SkVector offset,
+--- a/modules/skparagraph/src/OneLineShaper.cpp
++++ b/modules/skparagraph/src/OneLineShaper.cpp
+@@ -249,6 +249,8 @@ void OneLineShaper::finish(const Block& block, SkScalar height, SkScalar& advanceX) {
+         SkDEBUGF("Last range mismatch: %zu - %zu\n", lastTextEnd, blockText.end);
+         SkASSERT(false);
+     }
++    // The blocks of this style block are now runs; the next style block starts empty
++    fResolvedBlocks.clear();
+ }
+
+ // Make it [left:right) regardless of a text direction

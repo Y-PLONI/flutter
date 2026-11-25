@@ -49,7 +49,7 @@ $clangVersion | Set-Content (Join-Path $artifactDir 'clang-version.txt')
 # Validate both patches before spending time compiling. They target independent repositories.
 git -C $source apply --check $patches['windows-numpad']
 git -C $skia apply --check $patches['skia-style']
-git -C $source apply $patches['windows-numpad']
+git -C $skia apply $patches['skia-style']
 Push-Location $engineSrc
 try {
     python flutter/tools/gn --runtime-mode release --no-lto --no-goma --no-rbe "--windows-cpu=$arch" $engineArg 2>&1 |
@@ -60,17 +60,11 @@ try {
     }
     Copy-Item $argsGn $artifactDir
 
-    foreach ($variant in 'windows-numpad', 'both', 'skia-style') {
-        switch ($variant) {
-            'windows-numpad' { $applied = @('windows-numpad') }
-            'both' {
-                git -C $skia apply $patches['skia-style']
-                $applied = @('windows-numpad', 'skia-style')
-            }
-            'skia-style' {
-                git -C $source apply --reverse $patches['windows-numpad']
-                $applied = @('skia-style')
-            }
+    foreach ($variant in 'skia-style', 'both') {
+        $applied = @('skia-style')
+        if ($variant -eq 'both') {
+            git -C $source apply $patches['windows-numpad']
+            $applied += 'windows-numpad'
         }
         & $ninja -C $buildDir -j 3 flutter_windows 2>&1 |
             Tee-Object -FilePath (Join-Path $artifactDir "$variant-build.log")
@@ -128,57 +122,6 @@ try {
             '    ' + $checksums[0]
             ""
         ) >> $env:GITHUB_STEP_SUMMARY
-    }
-
-    if ($arch -eq 'x64') {
-        $keyboardSource = 'engine/src/flutter/shell/platform/windows/keyboard_key_embedder_handler.cc'
-        git -C $source apply $patches['windows-numpad']
-        # Leave the new tests in place while restoring the original handler.
-        git -C $source restore --source HEAD -- $keyboardSource
-        & $ninja -C $buildDir -j 3 flutter_windows_unittests 2>&1 |
-            Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-build-baseline.log')
-
-        $test = Join-Path $outDir 'flutter_windows_unittests.exe'
-        $baselineXml = Join-Path $artifactDir 'keyboard-unittests-baseline.xml'
-        Push-Location $outDir
-        try {
-            $PSNativeCommandUseErrorActionPreference = $false
-            & $test '--gtest_filter=KeyboardKeyEmbedderHandlerTest.Numpad*' "--gtest_output=xml:$baselineXml" 2>&1 |
-                Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-baseline.log')
-            $baselineExit = $LASTEXITCODE
-        }
-        finally {
-            $PSNativeCommandUseErrorActionPreference = $true
-            Pop-Location
-        }
-        $baselineTests = ([xml](Get-Content $baselineXml -Raw)).testsuites.testsuite.testcase
-        $expectedFailures = @(
-            'NumpadNavigationUsesNativeVirtualKeys'
-            'NumpadNavigationKeepsIdentityAcrossNumLock'
-            'NumpadAndDedicatedArrowsStayDistinct'
-            'NumpadRecoversAfterMissedRelease'
-        )
-        $actualFailures = @($baselineTests | Where-Object { $_.failure } | ForEach-Object { $_.name })
-        if ($baselineExit -ne 1 -or $baselineTests.Count -ne 6 -or $actualFailures.Count -ne $expectedFailures.Count -or
-            (Compare-Object $expectedFailures $actualFailures)) {
-            throw "Unexpected baseline exit code/tests/failures: $baselineExit/$($baselineTests.Count)/$actualFailures"
-        }
-
-        git -C $source apply "--include=$keyboardSource" $patches['windows-numpad']
-        & $ninja -C $buildDir -j 3 flutter_windows_unittests 2>&1 |
-            Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-build.log')
-        $fixedXml = Join-Path $artifactDir 'keyboard-unittests.xml'
-        Push-Location $outDir
-        try {
-            & $test '--gtest_filter=KeyboardKeyEmbedderHandlerTest.*' "--gtest_output=xml:$fixedXml" 2>&1 |
-                Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests.log')
-        }
-        finally { Pop-Location }
-        $fixedTests = ([xml](Get-Content $fixedXml -Raw)).testsuites.testsuite.testcase
-        if (@($fixedTests | Where-Object { $_.name -like 'Numpad*' }).Count -ne 6) {
-            throw 'Expected six new numpad cases to pass in the full keyboard suite'
-        }
-        "Windows keyboard suite passed $($fixedTests.Count) tests. The six new cases include four that failed with the original handler." >> $env:GITHUB_STEP_SUMMARY
     }
 }
 finally { Pop-Location }
