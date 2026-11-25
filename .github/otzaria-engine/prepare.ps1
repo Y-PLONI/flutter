@@ -80,3 +80,19 @@ finally {
     Pop-Location
 }
 (Get-PSDrive -Name ([IO.Path]::GetPathRoot($root).Substring(0, 1))) | Format-List Name, Used, Free
+
+# tools/gn invokes git.bat on Windows. The hosted runner supplies git.exe.
+if (-not (Get-Command git.bat -ErrorAction SilentlyContinue)) {
+    $gitExe = (Get-Command git.exe -CommandType Application).Source
+    $toolShims = Join-Path $root 'tool-shims'
+    New-Item -ItemType Directory -Path $toolShims | Out-Null
+    @(
+        '@echo off'
+        ('"{0}" %*' -f $gitExe)
+        'exit /b %errorlevel%'
+    ) | Set-Content -Encoding ascii (Join-Path $toolShims 'git.bat')
+    "$toolShims" >> $env:GITHUB_PATH
+    $env:Path = "$toolShims;$env:Path"
+}
+# Use the same subprocess invocation as GN to verify the batch-file lookup.
+python -c "import subprocess; subprocess.check_call(['git.bat', '--version'])"

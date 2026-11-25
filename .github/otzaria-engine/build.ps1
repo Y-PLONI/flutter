@@ -119,20 +119,66 @@ try {
             visualCppVersion = $env:OTZARIA_MSVC_VERSION
             windowsSdkVersion = $env:OTZARIA_WINDOWS_SDK
             clangVersion = $clangVersion
-        } | ConvertTo-Json | Set-Content (Join-Path $dest 'provenance.json')
+        } | ConvertTo-Json | Tee-Object -FilePath (Join-Path $dest 'provenance.json')
+        $checksums | Write-Output
+        @(
+            ""
+            "### $arch / $variant"
+            ""
+            '    ' + $checksums[0]
+            ""
+        ) >> $env:GITHUB_STEP_SUMMARY
     }
 
     if ($arch -eq 'x64') {
-        # Restore the keyboard patch before building the Windows test fixture.
+        $keyboardSource = 'engine/src/flutter/shell/platform/windows/keyboard_key_embedder_handler.cc'
         git -C $source apply $patches['windows-numpad']
+        # Leave the new tests in place while restoring the original handler.
+        git -C $source restore --source HEAD -- $keyboardSource
         & $ninja -C $buildDir -j 3 flutter_windows_unittests 2>&1 |
-            Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-build.log')
+            Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-build-baseline.log')
+
+        $test = Join-Path $outDir 'flutter_windows_unittests.exe'
+        $baselineXml = Join-Path $artifactDir 'keyboard-unittests-baseline.xml'
         Push-Location $outDir
         try {
-            ./flutter_windows_unittests.exe '--gtest_filter=KeyboardKeyEmbedderHandlerTest.*' 2>&1 |
+            $PSNativeCommandUseErrorActionPreference = $false
+            & $test '--gtest_filter=KeyboardKeyEmbedderHandlerTest.Numpad*' "--gtest_output=xml:$baselineXml" 2>&1 |
+                Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-baseline.log')
+            $baselineExit = $LASTEXITCODE
+        }
+        finally {
+            $PSNativeCommandUseErrorActionPreference = $true
+            Pop-Location
+        }
+        $baselineTests = ([xml](Get-Content $baselineXml -Raw)).testsuites.testsuite.testcase
+        $expectedFailures = @(
+            'NumpadNavigationUsesNativeVirtualKeys'
+            'NumpadNavigationKeepsIdentityAcrossNumLock'
+            'NumpadAndDedicatedArrowsStayDistinct'
+            'NumpadRecoversAfterMissedRelease'
+        )
+        $actualFailures = @($baselineTests | Where-Object { $_.failure } | ForEach-Object { $_.name })
+        if ($baselineExit -ne 1 -or $baselineTests.Count -ne 6 -or $actualFailures.Count -ne $expectedFailures.Count -or
+            (Compare-Object $expectedFailures $actualFailures)) {
+            throw "Unexpected baseline exit code/tests/failures: $baselineExit/$($baselineTests.Count)/$actualFailures"
+        }
+
+        git -C $source apply "--include=$keyboardSource" $patches['windows-numpad']
+        & $ninja -C $buildDir -j 3 flutter_windows_unittests 2>&1 |
+            Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests-build.log')
+        $fixedXml = Join-Path $artifactDir 'keyboard-unittests.xml'
+        Push-Location $outDir
+        try {
+            & $test '--gtest_filter=KeyboardKeyEmbedderHandlerTest.*' "--gtest_output=xml:$fixedXml" 2>&1 |
                 Tee-Object -FilePath (Join-Path $artifactDir 'keyboard-unittests.log')
         }
         finally { Pop-Location }
+        $fixedTests = ([xml](Get-Content $fixedXml -Raw)).testsuites.testsuite.testcase
+        if (@($fixedTests | Where-Object { $_.name -like 'Numpad*' }).Count -ne 6) {
+            throw 'Expected six new numpad cases to pass in the full keyboard suite'
+        }
+        "Windows keyboard suite passed $($fixedTests.Count) tests. The six new cases include four that failed with the original handler." >> $env:GITHUB_STEP_SUMMARY
     }
 }
 finally { Pop-Location }
