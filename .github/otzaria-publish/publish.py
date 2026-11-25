@@ -214,6 +214,8 @@ def main():
         return
 
     commit = run["head_sha"]
+    server = os.environ["GITHUB_SERVER_URL"]
+    publication = f"{server}/{REPOSITORY}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     with tempfile.TemporaryDirectory(prefix="otzaria-publish-") as temp, ExitStack() as stack:
         work = Path(temp)
         archives = {}
@@ -240,7 +242,8 @@ def main():
                     f"Flutter 3.47.7 Windows release engine for x64 and ARM64 with "
                     f"{spec['title']} and the existing accessibility fixes. "
                     f"The release archives contain the engine DLL and its PDB, LIB, and EXP files.\n\n"
-                    f"Build and validation evidence: {run['html_url']}"
+                    f"[Engine build and x64 validation]({run['html_url']})\n\n"
+                    f"[Native ARM64 validation and publication]({publication})"
                 )
                 subprocess.run(
                     [
