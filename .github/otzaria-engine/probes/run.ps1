@@ -19,8 +19,11 @@ if ((git -C $sdk rev-parse HEAD) -ne $releaseCommit) { throw "Unexpected Flutter
 $flutter = Join-Path $sdk 'bin/flutter.bat'
 # Bootstrap can write dependency resolution to stdout before the version JSON.
 & $flutter --version 2>&1 | Tee-Object -FilePath (Join-Path $artifact 'flutter-bootstrap.log')
-$version = & $flutter --version --machine
-$engineRevision = (ConvertFrom-Json ($version -join "`n")).engineRevision
+$versionText = (& $flutter --version --machine) -join "`n"
+$jsonStart = $versionText.IndexOf('{')
+if ($jsonStart -lt 0) { throw "Flutter version JSON was missing: $versionText" }
+$version = $versionText.Substring($jsonStart)
+$engineRevision = (ConvertFrom-Json $version).engineRevision
 if ($engineRevision -ne $env:OTZARIA_ENGINE_VERSION) {
     throw "Unexpected Flutter engine revision $engineRevision"
 }

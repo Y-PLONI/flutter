@@ -1,12 +1,15 @@
 """Publish three verified engine variants from a successful build run.
 
-To authorize publication, add request.json on a dedicated otzaria-publish-* branch.
-Use runId (integer), buildCommit (full SHA), and a tags object with a distinct
-otzaria-3.47.7-* tag for each variant. Push that branch to the engine fork.
+To validate a build, add validation.json to an otzaria-publish-* branch.
+Record the runId, buildCommit (full SHA) and the x64/arm64 artifactDigests.
+
+To authorize publication after reviewing that run, add request.json to the same
+branch. Record its validationRunId and a tags object with three distinct tags.
 """
 
 from contextlib import ExitStack
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -16,6 +19,7 @@ import shutil
 import subprocess
 import tempfile
 from typing import BinaryIO
+import xml.etree.ElementTree as ET
 import zipfile
 
 
@@ -129,20 +133,24 @@ def prepare_asset(outer, directory, arch, variant, run):
     return f"{checksums[filename]}  {filename}"
 
 
-def validate_request(request):
+def validate_build_reference(request):
     commit = request.get("buildCommit", "")
     if not re.fullmatch(r"[a-f0-9]{40}", commit):
         raise ValueError("buildCommit must be the exact GitHub Actions build commit SHA")
     run_id = request.get("runId")
     if type(run_id) is not int or run_id < 1:
         raise ValueError("runId must be a positive integer")
+    return run_id, commit
+
+
+def validate_release_tags(request):
     tags = request.get("tags", {})
     if tags.keys() != VARIANTS.keys() or len(set(tags.values())) != len(VARIANTS):
         raise ValueError("tags must contain a unique tag for every engine variant")
     for tag in tags.values():
         if not re.fullmatch(r"otzaria-3\.47\.7-[a-zA-Z0-9.-]+", tag):
             raise ValueError(f"Unexpected release tag {tag}")
-    return run_id, commit, tags
+    return tags
 
 
 def check_release_assets(release, commit, files):
@@ -165,54 +173,142 @@ def check_release_assets(release, commit, files):
     return [expected[name] for name in sorted(missing)]
 
 
-def load_verified_build():
-    if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
-        raise ValueError(f"Publication workflow must run in {REPOSITORY}")
-    request = json.loads(Path(__file__).with_name("request.json").read_text(encoding="utf-8"))
-    run_id, commit, tags = validate_request(request)
+def file_request(name):
+    return json.loads(Path(__file__).with_name(name).read_text(encoding="utf-8"))
+
+
+def load_verified_build(request):
+    run_id, commit = validate_build_reference(request)
     run = api(f"actions/runs/{run_id}")
     if (
-        run["conclusion"] != "success"
+        run["status"] != "completed"
         or run["head_sha"] != commit
         or run["head_repository"]["full_name"] != REPOSITORY
         or not run["head_branch"].startswith("otzaria-native-fixes-")
         or run["path"].split("@", 1)[0] != ".github/workflows/otzaria-native-fixes.yml"
     ):
-        raise ValueError("The requested run is not a successful Otzaria engine build")
+        raise ValueError("The requested run is not a completed Otzaria engine build")
+
+    jobs = {
+        job["name"]: job
+        for job in api(f"actions/runs/{run_id}/jobs?per_page=100")["jobs"]
+    }
+    probe_failure = "Run paragraph validation against the same release application"
+    for arch in ARCHITECTURES:
+        job = jobs[f"Windows engine ({arch})"]
+        steps = {step["name"]: step["conclusion"] for step in job["steps"]}
+        for required in ("Build engine variants and verify exports", "Upload engine variants and build evidence"):
+            if steps.get(required) != "success":
+                raise ValueError(f"The {arch} build did not pass {required}")
+        failures = {name for name, result in steps.items() if result == "failure"}
+        if job["conclusion"] != "success" and (
+            arch != "x64" or job["conclusion"] != "failure" or failures != {probe_failure}
+        ):
+            raise ValueError(f"The {arch} build did not finish successfully: {failures}")
 
     artifacts = {
         artifact["name"]: artifact
         for artifact in api(f"actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
     }
-    validation = "otzaria-windows-x64-paragraph-validation"
-    if validation not in artifacts or artifacts[validation]["expired"]:
-        raise ValueError("The successful build did not retain x64 paragraph validation evidence")
-    return run, artifacts, tags
+    for arch in ARCHITECTURES:
+        name = f"otzaria-windows-{arch}-release"
+        if artifacts[name]["expired"] or artifacts[name]["digest"] != request["artifactDigests"][arch]:
+            raise ValueError(f"Unexpected artifact digest for {arch}")
+    return run, artifacts
 
 
-def prepare_arm64_validation(run, artifacts):
-    arch = "arm64"
+def verify_build_evidence(package, arch):
+    baseline_exports = package.read("baseline-exports.txt")
+    if b"Name: " not in baseline_exports:
+        raise ValueError(f"The {arch} baseline export list is empty")
+    for variant in VARIANTS:
+        if package.read(f"{variant}-exports.txt") != baseline_exports:
+            raise ValueError(f"PE exports changed for {variant}/{arch}")
+
+    if arch == "x64":
+        baseline = ET.fromstring(package.read("keyboard-unittests-baseline.xml"))
+        fixed = ET.fromstring(package.read("keyboard-unittests.xml"))
+        expected_failures = {
+            "NumpadAndDedicatedArrowsStayDistinct",
+            "NumpadNavigationKeepsIdentityAcrossNumLock",
+            "NumpadNavigationUsesNativeVirtualKeys",
+            "NumpadRecoversAfterMissedRelease",
+        }
+        baseline_cases = baseline.findall(".//testcase")
+        failed = {case.attrib["name"] for case in baseline_cases if case.find("failure") is not None}
+        fixed_cases = fixed.findall(".//testcase")
+        fixed_numpad = {case.attrib["name"] for case in fixed_cases if case.attrib["name"].startswith("Numpad")}
+        if len(baseline_cases) != 6 or failed != expected_failures:
+            raise ValueError("The keyboard baseline XML does not show the four expected regressions")
+        if (
+            len(fixed_cases) != 25
+            or fixed_numpad != {case.attrib["name"] for case in baseline_cases}
+            or any(case.find("failure") is not None for case in fixed_cases)
+            or fixed.attrib["errors"] != "0"
+            or fixed.attrib["failures"] != "0"
+        ):
+            raise ValueError("The patched keyboard suite XML does not show 25 passing tests")
+        print("Verified four expected baseline failures and 25 passing keyboard tests", flush=True)
+
+
+def prepare_runtime(run, artifacts, arch):
     name = f"otzaria-windows-{arch}-release"
-    with tempfile.TemporaryDirectory(prefix="otzaria-validate-arm64-") as temp:
+    with tempfile.TemporaryDirectory(prefix=f"otzaria-validate-{arch}-") as temp:
         path = Path(temp) / f"{name}.zip"
         download_verified_artifact(artifacts[name], path)
         with zipfile.ZipFile(path) as package:
+            verify_build_evidence(package, arch)
             for variant in VARIANTS:
                 directory = Path("engine-artifacts") / variant
                 directory.mkdir(parents=True)
                 print(prepare_asset(package, directory, arch, variant, run), flush=True)
 
 
+def check_runtime_validation(request, build_request):
+    run_id = request.get("validationRunId")
+    if type(run_id) is not int or run_id < 1:
+        raise ValueError("validationRunId must be a positive integer")
+    validation = api(f"actions/runs/{run_id}")
+    if (
+        validation["conclusion"] != "success"
+        or validation["head_repository"]["full_name"] != REPOSITORY
+        or not validation["head_branch"].startswith("otzaria-publish-")
+        or validation["path"].split("@", 1)[0] != ".github/workflows/otzaria-runtime-validation.yml"
+    ):
+        raise ValueError("The requested Windows runtime validation run did not pass")
+    commit = validation["head_sha"]
+    payload = api(f"contents/.github/otzaria-publish/validation.json?ref={commit}")
+    validated_request = json.loads(base64.b64decode(payload["content"]))
+    if validated_request != build_request:
+        raise ValueError("Runtime validation used a different build or different artifact digests")
+
+    artifacts = {
+        artifact["name"]: artifact
+        for artifact in api(f"actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
+    }
+    for arch in ARCHITECTURES:
+        name = f"otzaria-windows-{arch}-paragraph-validation"
+        if name not in artifacts or artifacts[name]["expired"]:
+            raise ValueError(f"The validation run did not retain {arch} paragraph evidence")
+    return validation
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prepare-arm64", action="store_true")
+    parser.add_argument("--prepare-runtime", choices=ARCHITECTURES)
     args = parser.parse_args()
 
-    run, artifacts, tags = load_verified_build()
-    if args.prepare_arm64:
-        prepare_arm64_validation(run, artifacts)
+    if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
+        raise ValueError(f"This workflow must run in {REPOSITORY}")
+    build_request = file_request("validation.json")
+    run, artifacts = load_verified_build(build_request)
+    if args.prepare_runtime:
+        prepare_runtime(run, artifacts, args.prepare_runtime)
         return
 
+    release_request = file_request("request.json")
+    tags = validate_release_tags(release_request)
+    validation = check_runtime_validation(release_request, build_request)
     commit = run["head_sha"]
     server = os.environ["GITHUB_SERVER_URL"]
     publication = f"{server}/{REPOSITORY}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
@@ -224,6 +320,7 @@ def main():
             path = work / f"{name}.zip"
             download_verified_artifact(artifacts[name], path)
             archives[arch] = stack.enter_context(zipfile.ZipFile(path))
+            verify_build_evidence(archives[arch], arch)
         release_files = {}
         for variant, spec in VARIANTS.items():
             directory = work / variant
@@ -242,8 +339,9 @@ def main():
                     f"Flutter 3.47.7 Windows release engine for x64 and ARM64 with "
                     f"{spec['title']} and the existing accessibility fixes. "
                     f"The release archives contain the engine DLL and its PDB, LIB, and EXP files.\n\n"
-                    f"[Engine build and x64 validation]({run['html_url']})\n\n"
-                    f"[Native ARM64 validation and publication]({publication})"
+                    f"[Engine build, exports, and keyboard tests]({run['html_url']})\n\n"
+                    f"[Native x64 and ARM64 runtime validation]({validation['html_url']})\n\n"
+                    f"[Publication checks]({publication})"
                 )
                 subprocess.run(
                     [

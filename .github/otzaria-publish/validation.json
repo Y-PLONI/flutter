@@ -1,0 +1,8 @@
+{
+  "runId": 45690898597,
+  "buildCommit": "caf98e829c191f3142cba422f2a5d9514c19b70a",
+  "artifactDigests": {
+    "x64": "sha256:43ec634b486df963732395cd6f8db27f0f8b6495e97fa7f07290486a4e5514c9",
+    "arm64": "sha256:03c10e711028d988fc525f37dd3792adf6ec7fde2e3b2cf3a5d08255ab6d6153"
+  }
+}
