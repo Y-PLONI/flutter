@@ -197,7 +197,11 @@ def load_verified_build(request):
     for arch in ARCHITECTURES:
         job = jobs[f"Windows engine ({arch})"]
         steps = {step["name"]: step["conclusion"] for step in job["steps"]}
-        for required in ("Build engine variants and verify exports", "Upload engine variants and build evidence"):
+        for required in (
+            "Prepare pinned engine sources and Windows toolchain",
+            "Build engine variants and verify exports",
+            "Upload engine variants and build evidence",
+        ):
             if steps.get(required) != "success":
                 raise ValueError(f"The {arch} build did not pass {required}")
         failures = {name for name, result in steps.items() if result == "failure"}
@@ -339,7 +343,8 @@ def main():
                     f"Flutter 3.47.7 Windows release engine for x64 and ARM64 with "
                     f"{spec['title']} and the existing accessibility fixes. "
                     f"The release archives contain the engine DLL and its PDB, LIB, and EXP files.\n\n"
-                    f"[Engine build, exports, and keyboard tests]({run['html_url']})\n\n"
+                    f"[Engine build, exports, and keyboard tests]({run['html_url']}). "
+                    "The original runner's paragraph probe stopped during Flutter tool bootstrap.\n\n"
                     f"[Native x64 and ARM64 runtime validation]({validation['html_url']})\n\n"
                     f"[Publication checks]({publication})"
                 )
