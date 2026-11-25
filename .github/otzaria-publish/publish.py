@@ -4,7 +4,7 @@ To validate a build, add validation.json to an otzaria-publish-* branch.
 Record the runId, buildCommit (full SHA) and the x64/arm64 artifactDigests.
 
 To authorize publication after reviewing that run, add request.json to the same
-branch. Record its validationRunId and a tags object with three distinct tags.
+branch. Record its validationRunId and a tags object for the variants to publish.
 """
 
 from contextlib import ExitStack
@@ -145,8 +145,8 @@ def validate_build_reference(request):
 
 def validate_release_tags(request):
     tags = request.get("tags", {})
-    if tags.keys() != VARIANTS.keys() or len(set(tags.values())) != len(VARIANTS):
-        raise ValueError("tags must contain a unique tag for every engine variant")
+    if not tags or not tags.keys() <= VARIANTS.keys() or len(set(tags.values())) != len(tags):
+        raise ValueError("tags must contain a unique tag for each selected engine variant")
     for tag in tags.values():
         if not re.fullmatch(r"otzaria-3\.47\.7-[a-zA-Z0-9.-]+", tag):
             raise ValueError(f"Unexpected release tag {tag}")
@@ -326,7 +326,8 @@ def main():
             archives[arch] = stack.enter_context(zipfile.ZipFile(path))
             verify_build_evidence(archives[arch], arch)
         release_files = {}
-        for variant, spec in VARIANTS.items():
+        for variant in tags:
+            spec = VARIANTS[variant]
             directory = work / variant
             directory.mkdir()
             checksums = [prepare_asset(archives[arch], directory, arch, variant, run) for arch in ARCHITECTURES]
@@ -336,8 +337,8 @@ def main():
 
         # Stage every release and its assets before publishing any of them.
         releases = releases_by_tag()
-        for variant, spec in VARIANTS.items():
-            tag = tags[variant]
+        for variant, tag in tags.items():
+            spec = VARIANTS[variant]
             if tag not in releases:
                 notes = (
                     f"Flutter 3.47.7 Windows release engine for x64 and ARM64 with "
