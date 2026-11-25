@@ -6,6 +6,7 @@ otzaria-3.47.7-* tag for each variant. Push that branch to the engine fork.
 """
 
 from contextlib import ExitStack
+import argparse
 import hashlib
 import json
 import os
@@ -164,7 +165,7 @@ def check_release_assets(release, commit, files):
     return [expected[name] for name in sorted(missing)]
 
 
-def main():
+def load_verified_build():
     if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
         raise ValueError(f"Publication workflow must run in {REPOSITORY}")
     request = json.loads(Path(__file__).with_name("request.json").read_text(encoding="utf-8"))
@@ -183,6 +184,36 @@ def main():
         artifact["name"]: artifact
         for artifact in api(f"actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
     }
+    validation = "otzaria-windows-x64-paragraph-validation"
+    if validation not in artifacts or artifacts[validation]["expired"]:
+        raise ValueError("The successful build did not retain x64 paragraph validation evidence")
+    return run, artifacts, tags
+
+
+def prepare_arm64_validation(run, artifacts):
+    arch = "arm64"
+    name = f"otzaria-windows-{arch}-release"
+    with tempfile.TemporaryDirectory(prefix="otzaria-validate-arm64-") as temp:
+        path = Path(temp) / f"{name}.zip"
+        download_verified_artifact(artifacts[name], path)
+        with zipfile.ZipFile(path) as package:
+            for variant in VARIANTS:
+                directory = Path("engine-artifacts") / variant
+                directory.mkdir(parents=True)
+                print(prepare_asset(package, directory, arch, variant, run), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prepare-arm64", action="store_true")
+    args = parser.parse_args()
+
+    run, artifacts, tags = load_verified_build()
+    if args.prepare_arm64:
+        prepare_arm64_validation(run, artifacts)
+        return
+
+    commit = run["head_sha"]
     with tempfile.TemporaryDirectory(prefix="otzaria-publish-") as temp, ExitStack() as stack:
         work = Path(temp)
         archives = {}
@@ -191,10 +222,6 @@ def main():
             path = work / f"{name}.zip"
             download_verified_artifact(artifacts[name], path)
             archives[arch] = stack.enter_context(zipfile.ZipFile(path))
-        validation = "otzaria-windows-x64-paragraph-validation"
-        if validation not in artifacts or artifacts[validation]["expired"]:
-            raise ValueError("The successful build did not retain paragraph validation evidence")
-
         release_files = {}
         for variant, spec in VARIANTS.items():
             directory = work / variant

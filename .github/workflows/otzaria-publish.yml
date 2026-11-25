@@ -7,14 +7,54 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: otzaria-engine-publication
   cancel-in-progress: false
 
 jobs:
+  validate-arm64:
+    if: github.repository == 'Y-PLONI/flutter'
+    runs-on: windows-11-arm
+    timeout-minutes: 35
+    env:
+      OTZARIA_ARCH: arm64
+      OTZARIA_ENGINE_VERSION: deb287481e3ce9468f3434937ced4240a70539ca
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/otzaria-publish
+            .github/otzaria-engine/probes
+
+      - name: Verify ARM64 build archives
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/otzaria-publish/publish.py --prepare-arm64
+
+      - name: Run the ARM64 paragraph probe on the same release application
+        shell: pwsh
+        run: |
+          $env:OTZARIA_BUILD_ROOT = Join-Path ([IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE)) 'otz'
+          New-Item -ItemType Directory -Path $env:OTZARIA_BUILD_ROOT | Out-Null
+          .github/otzaria-engine/probes/run.ps1
+
+      - name: Upload ARM64 paragraph validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: otzaria-windows-arm64-paragraph-validation
+          path: paragraph-validation/
+          if-no-files-found: ignore
+
   publish:
+    needs: validate-arm64
+    permissions:
+      actions: read
+      contents: write
     if: github.repository == 'Y-PLONI/flutter'
     runs-on: ubuntu-24.04
     timeout-minutes: 25

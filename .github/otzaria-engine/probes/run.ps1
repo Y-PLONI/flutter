@@ -1,6 +1,11 @@
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
+$arch = $env:OTZARIA_ARCH
+$hostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($arch -notin @('x64', 'arm64') -or $hostArch -ne $arch) {
+    throw "Expected a native Windows $arch runner, found $hostArch"
+}
 $artifact = Join-Path $env:GITHUB_WORKSPACE 'paragraph-validation'
 $buildArtifact = Join-Path $env:GITHUB_WORKSPACE 'engine-artifacts'
 $probe = Join-Path $env:OTZARIA_BUILD_ROOT 'paragraph_probe'
@@ -12,6 +17,8 @@ New-Item -ItemType Directory -Path $artifact | Out-Null
 git clone --branch $release --depth=1 https://github.com/flutter/flutter.git $sdk
 if ((git -C $sdk rev-parse HEAD) -ne $releaseCommit) { throw "Unexpected Flutter $release revision" }
 $flutter = Join-Path $sdk 'bin/flutter.bat'
+# Bootstrap can write dependency resolution to stdout before the version JSON.
+& $flutter --version 2>&1 | Tee-Object -FilePath (Join-Path $artifact 'flutter-bootstrap.log')
 $version = & $flutter --version --machine
 $engineRevision = (ConvertFrom-Json ($version -join "`n")).engineRevision
 if ($engineRevision -ne $env:OTZARIA_ENGINE_VERSION) {
@@ -26,10 +33,24 @@ try {
     & $flutter build windows --release 2>&1 | Tee-Object -FilePath (Join-Path $artifact 'app-build.log')
 }
 finally { Pop-Location }
-$releaseDir = Join-Path $probe 'build/windows/x64/runner/Release'
+$releaseDir = Join-Path $probe "build/windows/$arch/runner/Release"
 $probeHash = (Get-FileHash (Join-Path $releaseDir 'data/app.so')).Hash.ToLowerInvariant()
-$baselineDll = Join-Path $env:OTZARIA_BUILD_ROOT 'baseline/flutter_windows.dll'
-$zipName = 'flutter_windows-windows-x64-release.zip'
+$baselineDir = Join-Path $env:OTZARIA_BUILD_ROOT 'baseline'
+$baselineDll = Join-Path $baselineDir 'flutter_windows.dll'
+$zipName = "flutter_windows-windows-$arch-release.zip"
+if (-not (Test-Path $baselineDll)) {
+    $baselineHash = @{
+        'x64' = 'cc04e8c75d7b8740b3b2705e87a9f9d6839366518ad1eb842e33c6efd2048818'
+        'arm64' = 'ed7d43bbc77af371cb44303d9484503417761c2ba36480982bc467552c888eab'
+    }[$arch]
+    $baselineZip = Join-Path $env:OTZARIA_BUILD_ROOT "a11y-$zipName"
+    $baselineUrl = "https://github.com/palmoni5/flutter/releases/download/otzaria-3.47.7-a11y.1/$zipName"
+    Invoke-WebRequest $baselineUrl -OutFile $baselineZip
+    if ((Get-FileHash $baselineZip).Hash -ne $baselineHash) {
+        throw "Unexpected accessibility release SHA256 for $zipName"
+    }
+    Expand-Archive -LiteralPath $baselineZip -DestinationPath $baselineDir
+}
 $hashes = [ordered]@{ appSnapshotSha256 = $probeHash }
 
 foreach ($variant in 'stock', 'a11y', 'windows-numpad', 'both', 'skia-style') {
