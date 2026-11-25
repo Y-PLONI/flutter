@@ -71,20 +71,31 @@ Map<String, Object> _measure({
     wordSpacing: wordSpacing,
   );
   final highlighted = ui.TextStyle(
-    letterSpacing: letterSpacing,
-    wordSpacing: wordSpacing,
+    // Give the geometry cases different spacing on either side of a style
+    // boundary. With zero letter spacing, the match can also form ligatures.
+    letterSpacing: includeGeometry ? 0.0 : letterSpacing,
+    wordSpacing: includeGeometry ? wordSpacing + 2.0 : wordSpacing,
+    fontFamily: includeGeometry ? 'Times New Roman' : null,
+    fontFeatures: includeGeometry
+        ? const [ui.FontFeature.enable('liga')]
+        : null,
     background: ui.Paint()..color = const ui.Color(0xffffff00),
   );
 
   var textLength = 0;
   for (var group = 0; group < groups; group++) {
     final start = 'שָׁלוֹם abc ${group % 10} ';
-    const match = 'עולם';
+    final match = includeGeometry ? 'office עָוֹלָם' : 'עולם';
     final end = group % 7 == 6 ? '\n' : ' ';
     builder
       ..pushStyle(normal)
       ..addText(start)
-      ..pop()
+      ..pop();
+    if (includeGeometry && group % 6 == 4) {
+      builder.addPlaceholder(14, 20, ui.PlaceholderAlignment.middle);
+      textLength++;
+    }
+    builder
       ..pushStyle(highlighted)
       ..addText(match)
       ..pop()
@@ -92,10 +103,6 @@ Map<String, Object> _measure({
       ..addText(end)
       ..pop();
     textLength += start.length + match.length + end.length;
-    if (includeGeometry && group % 6 == 4) {
-      builder.addPlaceholder(14, 20, ui.PlaceholderAlignment.middle);
-      textLength++;
-    }
   }
 
   final paragraph = builder.build();
