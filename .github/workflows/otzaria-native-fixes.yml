@@ -1,0 +1,67 @@
+name: Otzaria Windows engine
+
+on:
+  push:
+    branches: ['otzaria-native-fixes-*']
+    paths:
+      - '.github/workflows/otzaria-native-fixes.yml'
+      - '.github/otzaria-engine/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-engine:
+    name: Windows engine (${{ matrix.arch }})
+    runs-on: windows-2022
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+      DEPOT_TOOLS_UPDATE: '0'
+      GYP_MSVS_VERSION: '2022'
+      OTZARIA_ARCH: ${{ matrix.arch }}
+      OTZARIA_A11Y_SOURCE: 78b942eaf6b38a3ec398d35404336bdc032ba310
+      OTZARIA_ENGINE_VERSION: deb287481e3ce9468f3434937ced4240a70539ca
+      OTZARIA_SKIA_VERSION: 8df24be66531469e576a806749a0202ae26b8d08
+      OTZARIA_DART_VERSION: 04bcd1036cdc799ac6564988f159ee454d42c822
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/otzaria-engine
+
+      - name: Prepare pinned engine sources and Windows toolchain
+        run: .github/otzaria-engine/prepare.ps1
+
+      - name: Build engine variants and verify exports
+        run: .github/otzaria-engine/build.ps1
+
+      - name: Upload engine variants and build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: otzaria-windows-${{ matrix.arch }}-release
+          path: engine-artifacts/
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Run paragraph validation against the same release application
+        if: matrix.arch == 'x64'
+        run: .github/otzaria-engine/probes/run.ps1
+
+      - name: Upload paragraph validation evidence
+        if: always() && matrix.arch == 'x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: otzaria-windows-x64-paragraph-validation
+          path: paragraph-validation/
+          if-no-files-found: ignore

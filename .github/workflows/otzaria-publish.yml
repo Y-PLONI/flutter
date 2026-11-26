@@ -1,0 +1,30 @@
+name: Publish verified Otzaria engines
+
+on:
+  push:
+    branches: ['otzaria-publish-*']
+    paths: ['.github/otzaria-publish/request.json']
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: otzaria-engine-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Y-PLONI/flutter'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/otzaria-publish
+
+      - name: Validate checksums and test evidence, then publish prereleases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/otzaria-publish/publish.py
