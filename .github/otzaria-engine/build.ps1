@@ -5,7 +5,6 @@ $source = $env:OTZARIA_FLUTTER_SOURCE
 $arch = $env:OTZARIA_ARCH
 $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'engine-artifacts'
 $engineSrc = Join-Path $source 'engine/src'
-$skia = Join-Path $engineSrc 'flutter/third_party/skia'
 $ninja = Join-Path $source 'third_party/ninja/ninja.exe'
 $clangTools = Join-Path $engineSrc 'flutter/buildtools/windows-x64/clang/bin'
 $readobj = Join-Path $clangTools 'llvm-readobj.exe'
@@ -14,20 +13,14 @@ $outDir = Join-Path $engineSrc $buildDir
 $engineArg = "--gn-args=engine_version=""$env:OTZARIA_ENGINE_VERSION"""
 $patches = @{
     'windows-numpad' = Join-Path $PSScriptRoot 'patches/windows-numpad.patch'
-    'skia-style' = Join-Path $PSScriptRoot 'patches/skia-style.patch'
 }
 $zipName = "flutter_windows-windows-$arch-release.zip"
-$baselineHash = @{
-    'x64' = 'cc04e8c75d7b8740b3b2705e87a9f9d6839366518ad1eb842e33c6efd2048818'
-    'arm64' = 'ed7d43bbc77af371cb44303d9484503417761c2ba36480982bc467552c888eab'
-}[$arch]
-$baselineUrl = "https://github.com/palmoni5/flutter/releases/download/otzaria-3.47.7-a11y.1/$zipName"
-$baselinePath = Join-Path $env:OTZARIA_BUILD_ROOT $zipName
+# The official engine of the same revision is the export baseline: the fixes must not change the ABI.
+$baselineUrl = "https://storage.googleapis.com/flutter_infra_release/flutter/$env:OTZARIA_ENGINE_VERSION/windows-$arch-release/windows-$arch-flutter.zip"
+$baselinePath = Join-Path $env:OTZARIA_BUILD_ROOT "official-windows-$arch-flutter.zip"
 $baselineDir = Join-Path $env:OTZARIA_BUILD_ROOT 'baseline'
 Invoke-WebRequest $baselineUrl -OutFile $baselinePath
-if ((Get-FileHash $baselinePath).Hash -ne $baselineHash) {
-    throw "Unexpected accessibility release SHA256 for $zipName"
-}
+$baselineHash = (Get-FileHash $baselinePath).Hash.ToLowerInvariant()
 Expand-Archive -LiteralPath $baselinePath -DestinationPath $baselineDir
 
 function Read-Exports($dll) {
@@ -46,10 +39,8 @@ $baselineExports | Set-Content (Join-Path $artifactDir 'baseline-exports.txt')
 $clangVersion = & (Join-Path $clangTools 'clang-cl.exe') --version
 $clangVersion | Set-Content (Join-Path $artifactDir 'clang-version.txt')
 
-# Validate both patches before spending time compiling. They target independent repositories.
+# Validate the patch before spending time compiling.
 git -C $source apply --check $patches['windows-numpad']
-git -C $skia apply --check $patches['skia-style']
-git -C $source apply $patches['windows-numpad']
 Push-Location $engineSrc
 try {
     python flutter/tools/gn --runtime-mode release --no-lto --no-goma --no-rbe "--windows-cpu=$arch" $engineArg 2>&1 |
@@ -60,16 +51,12 @@ try {
     }
     Copy-Item $argsGn $artifactDir
 
-    foreach ($variant in 'windows-numpad', 'both', 'skia-style') {
+    foreach ($variant in 'a11y', 'windows-numpad') {
         switch ($variant) {
-            'windows-numpad' { $applied = @('windows-numpad') }
-            'both' {
-                git -C $skia apply $patches['skia-style']
-                $applied = @('windows-numpad', 'skia-style')
-            }
-            'skia-style' {
-                git -C $source apply --reverse $patches['windows-numpad']
-                $applied = @('skia-style')
+            'a11y' { $applied = @() }
+            'windows-numpad' {
+                git -C $source apply $patches['windows-numpad']
+                $applied = @('windows-numpad')
             }
         }
         & $ninja -C $buildDir -j 3 flutter_windows 2>&1 |
@@ -83,6 +70,8 @@ try {
         }
         $dest = Join-Path $artifactDir $variant
         New-Item -ItemType Directory -Path $dest | Out-Null
+        $debugDirectory = & $readobj --coff-debug-directory $dll
+        $debugDirectory | Set-Content (Join-Path $dest 'debug-directory.txt')
         $binaries = @('flutter_windows.dll', 'flutter_windows.dll.exp', 'flutter_windows.dll.lib', 'flutter_windows.dll.pdb')
         $files = foreach ($binary in $binaries) {
             $path = Join-Path $outDir $binary
@@ -110,8 +99,8 @@ try {
             skiaCommit = $env:OTZARIA_SKIA_VERSION
             dartCommit = $env:OTZARIA_DART_VERSION
             patchSha256 = $patchHashes
-            baselineArchiveSha256 = $baselineHash
-            baselineUrl = $baselineUrl
+            officialArchiveSha256 = $baselineHash
+            officialArchiveUrl = $baselineUrl
             workflowCommit = $env:GITHUB_SHA
             workflowRun = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             depotToolsCommit = $env:OTZARIA_DEPOT_TOOLS_REVISION
@@ -127,12 +116,13 @@ try {
             ""
             '    ' + $checksums[0]
             ""
+            '    ' + (($debugDirectory | Select-String 'PDBGUID') -join ' ').Trim()
+            ""
         ) >> $env:GITHUB_STEP_SUMMARY
     }
 
     if ($arch -eq 'x64') {
         $keyboardSource = 'engine/src/flutter/shell/platform/windows/keyboard_key_embedder_handler.cc'
-        git -C $source apply $patches['windows-numpad']
         # Leave the new tests in place while restoring the original handler.
         git -C $source restore --source HEAD -- $keyboardSource
         & $ninja -C $buildDir -j 3 flutter_windows_unittests 2>&1 |

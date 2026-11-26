@@ -1,4 +1,4 @@
-"""Publish three verified engine variants from a successful build run.
+"""Publish verified Flutter 3.47.9 engine variants from a successful build run.
 
 To validate a build, add validation.json to an otzaria-publish-* branch.
 Record the runId, buildCommit (full SHA) and the x64/arm64 artifactDigests.
@@ -24,27 +24,30 @@ import zipfile
 
 
 ARCHITECTURES = ("x64", "arm64")
+FLUTTER_VERSION = "3.47.9"
+FLUTTER_COMMIT = "c197ca5199e9ee5661e865596c9c07294dfab51c"
 VARIANTS = {
+    "a11y": {
+        "title": "accessibility fixes",
+        "patches": (),
+    },
     "windows-numpad": {
         "title": "Windows numpad navigation",
         "patches": ("windows-numpad",),
     },
-    "skia-style": {
-        "title": "Skia paragraph style lookup",
-        "patches": ("skia-style",),
-    },
-    "both": {
-        "title": "Windows numpad navigation and Skia paragraph style lookup",
-        "patches": ("windows-numpad", "skia-style"),
-    },
 }
-A11Y_SOURCE = "78b942eaf6b38a3ec398d35404336bdc032ba310"
-ENGINE_VERSION = "deb287481e3ce9468f3434937ced4240a70539ca"
+A11Y_SOURCE = "e86b9d824eeade0a241ce91bb877fdd0d1da3941"
+ENGINE_VERSION = "89c39edfdfae2949f6806e4a315c0c08522238b7"
 SKIA_VERSION = "8df24be66531469e576a806749a0202ae26b8d08"
 PATCH_SHA256 = {
     "windows-numpad": "544bd5c5799b8227636c3e4b53f36ff184f334003cf09b2552f8a54ff88b4a57",
-    "skia-style": "f62f946e95820e1e52f680a8d517ea5c6a2617c7c85889f39157485404df3407",
 }
+A11Y_COMMITS = (
+    ("b207278eda", "Keep AccessibilityBridge usable after nested reparenting (flutter/flutter#175041)"),
+    ("2f3076b1ab", "Measure text length without converting it to UTF-16 (flutter/flutter#196183)"),
+    ("b3667ab814", "Make ITextProvider::GetVisibleRanges linear in the number of lines (flutter/flutter#196183)"),
+    ("78b942eaf6", "Tie the text length cache to the embedded object behavior (flutter/flutter#196183)"),
+)
 BINARIES = {
     "flutter_windows.dll",
     "flutter_windows.dll.exp",
@@ -148,7 +151,7 @@ def validate_release_tags(request):
     if not tags or not tags.keys() <= VARIANTS.keys() or len(set(tags.values())) != len(tags):
         raise ValueError("tags must contain a unique tag for each selected engine variant")
     for tag in tags.values():
-        if not re.fullmatch(r"otzaria-3\.47\.7-[a-zA-Z0-9.-]+", tag):
+        if not re.fullmatch(r"otzaria-3\.47\.9-[a-zA-Z0-9.-]+", tag):
             raise ValueError(f"Unexpected release tag {tag}")
     return tags
 
@@ -340,12 +343,15 @@ def main():
         for variant, tag in tags.items():
             spec = VARIANTS[variant]
             if tag not in releases:
+                fixes = f"{spec['title']} and the accessibility fixes" if spec["patches"] else "the accessibility fixes"
+                commits = "\n".join(f"- `{sha}` (cherry-picked) {title}" for sha, title in A11Y_COMMITS)
                 notes = (
-                    f"Flutter 3.47.7 Windows release engine for x64 and ARM64 with "
-                    f"{spec['title']} and the existing accessibility fixes. "
-                    f"The release archives contain the engine DLL and its PDB, LIB, and EXP files.\n\n"
-                    f"[Engine build, exports, and keyboard tests]({run['html_url']}). "
-                    "The original runner's paragraph probe stopped during Flutter tool bootstrap.\n\n"
+                    f"Flutter {FLUTTER_VERSION} Windows release engine for x64 and ARM64 with {fixes}. "
+                    f"It replaces `flutter_windows.dll` of Flutter {FLUTTER_VERSION} (engine `{ENGINE_VERSION}`). "
+                    "The release archives contain the engine DLL and its PDB, LIB, and EXP files.\n\n"
+                    f"Source: Flutter tag {FLUTTER_VERSION} (`{FLUTTER_COMMIT}`) with the accessibility commits "
+                    f"(`{A11Y_SOURCE}`):\n\n{commits}\n\n"
+                    f"[Engine build, exports, and keyboard tests]({run['html_url']})\n\n"
                     f"[Native x64 and ARM64 runtime validation]({validation['html_url']})\n\n"
                     f"[Publication checks]({publication})"
                 )
@@ -355,7 +361,7 @@ def main():
                         "--repo", REPOSITORY,
                         "--target", commit,
                         "--draft", "--prerelease", "--latest=false",
-                        "--title", f"Flutter 3.47.7 – {spec['title']}",
+                        "--title", f"Flutter {FLUTTER_VERSION} – {spec['title']}",
                         "--notes", notes,
                     ],
                     check=True,

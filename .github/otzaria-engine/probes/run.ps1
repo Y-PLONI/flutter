@@ -10,8 +10,8 @@ $artifact = Join-Path $env:GITHUB_WORKSPACE 'paragraph-validation'
 $buildArtifact = Join-Path $env:GITHUB_WORKSPACE 'engine-artifacts'
 $probe = Join-Path $env:OTZARIA_BUILD_ROOT 'paragraph_probe'
 $sdk = Join-Path $env:OTZARIA_BUILD_ROOT 'release-sdk'
-$release = '3.47.7'
-$releaseCommit = 'abaf9c523780a608bd46686fd5e53740a07077f8'
+$release = '3.47.9'
+$releaseCommit = 'c197ca5199e9ee5661e865596c9c07294dfab51c'
 New-Item -ItemType Directory -Path $artifact | Out-Null
 
 git clone --branch $release --depth=1 https://github.com/flutter/flutter.git $sdk
@@ -44,31 +44,14 @@ try {
 finally { Pop-Location }
 $releaseDir = Join-Path $probe "build/windows/$arch/runner/Release"
 $probeHash = (Get-FileHash (Join-Path $releaseDir 'data/app.so')).Hash.ToLowerInvariant()
-$baselineDir = Join-Path $env:OTZARIA_BUILD_ROOT 'baseline'
-$baselineDll = Join-Path $baselineDir 'flutter_windows.dll'
 $zipName = "flutter_windows-windows-$arch-release.zip"
-if (-not (Test-Path $baselineDll)) {
-    $baselineHash = @{
-        'x64' = 'cc04e8c75d7b8740b3b2705e87a9f9d6839366518ad1eb842e33c6efd2048818'
-        'arm64' = 'ed7d43bbc77af371cb44303d9484503417761c2ba36480982bc467552c888eab'
-    }[$arch]
-    $baselineZip = Join-Path $env:OTZARIA_BUILD_ROOT "a11y-$zipName"
-    $baselineUrl = "https://github.com/palmoni5/flutter/releases/download/otzaria-3.47.7-a11y.1/$zipName"
-    Invoke-WebRequest $baselineUrl -OutFile $baselineZip
-    if ((Get-FileHash $baselineZip).Hash -ne $baselineHash) {
-        throw "Unexpected accessibility release SHA256 for $zipName"
-    }
-    Expand-Archive -LiteralPath $baselineZip -DestinationPath $baselineDir
-}
 $hashes = [ordered]@{ appSnapshotSha256 = $probeHash }
 
-foreach ($variant in 'stock', 'a11y', 'windows-numpad', 'both', 'skia-style') {
+foreach ($variant in 'stock', 'a11y', 'windows-numpad') {
     $output = Join-Path $env:OTZARIA_BUILD_ROOT "probe-$variant"
     Copy-Item $releaseDir -Destination $output -Recurse
     $dll = Join-Path $output 'flutter_windows.dll'
-    if ($variant -eq 'a11y') {
-        Copy-Item $baselineDll -Destination $dll -Force
-    } elseif ($variant -ne 'stock') {
+    if ($variant -ne 'stock') {
         $zip = Join-Path $buildArtifact "$variant/$zipName"
         $expanded = Join-Path $env:OTZARIA_BUILD_ROOT "probe-engine-$variant"
         Expand-Archive -LiteralPath $zip -DestinationPath $expanded
@@ -88,7 +71,8 @@ foreach ($variant in 'stock', 'a11y', 'windows-numpad', 'both', 'skia-style') {
     }
 }
 $hashes | ConvertTo-Json | Set-Content (Join-Path $artifact 'sha256.json')
-foreach ($variant in 'windows-numpad', 'both', 'skia-style') {
-    python (Join-Path $PSScriptRoot 'compare_paragraph_style_lookup.py') (Join-Path $artifact 'a11y.json') (Join-Path $artifact "$variant.json") 2>&1 |
+foreach ($variant in 'a11y', 'windows-numpad') {
+    python (Join-Path $PSScriptRoot 'compare_paragraph_style_lookup.py') (Join-Path $artifact 'stock.json') (Join-Path $artifact "$variant.json") 2>&1 |
         Tee-Object -FilePath (Join-Path $artifact "$variant-comparison.log")
+    if ($LASTEXITCODE -ne 0) { throw "Paragraph geometry of $variant differs from the official engine" }
 }

@@ -25,10 +25,10 @@ jobs:
       DEPOT_TOOLS_UPDATE: '0'
       GYP_MSVS_VERSION: '2022'
       OTZARIA_ARCH: ${{ matrix.arch }}
-      OTZARIA_A11Y_SOURCE: 78b942eaf6b38a3ec398d35404336bdc032ba310
-      OTZARIA_ENGINE_VERSION: deb287481e3ce9468f3434937ced4240a70539ca
+      OTZARIA_A11Y_SOURCE: e86b9d824eeade0a241ce91bb877fdd0d1da3941
+      OTZARIA_ENGINE_VERSION: 89c39edfdfae2949f6806e4a315c0c08522238b7
       OTZARIA_SKIA_VERSION: 8df24be66531469e576a806749a0202ae26b8d08
-      OTZARIA_DART_VERSION: 04bcd1036cdc799ac6564988f159ee454d42c822
+      OTZARIA_DART_VERSION: 416e33b0ffaef062a60ec966bb8c82ed2b83f128
     defaults:
       run:
         shell: pwsh
@@ -53,15 +53,3 @@ jobs:
           path: engine-artifacts/
           if-no-files-found: error
           compression-level: 0
-
-      - name: Run paragraph validation against the same release application
-        if: matrix.arch == 'x64'
-        run: .github/otzaria-engine/probes/run.ps1
-
-      - name: Upload paragraph validation evidence
-        if: always() && matrix.arch == 'x64'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: otzaria-windows-x64-paragraph-validation
-          path: paragraph-validation/
-          if-no-files-found: ignore

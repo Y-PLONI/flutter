@@ -35,7 +35,7 @@ foreach ($arch in ('x64', $env:OTZARIA_ARCH | Select-Object -Unique)) {
 git config --global core.autocrlf false
 git config --global core.longpaths true
 git init "$source"
-git -C "$source" remote add origin https://github.com/palmoni5/flutter.git
+git -C "$source" remote add origin https://github.com/Y-PLONI/flutter.git
 git -C "$source" fetch --no-tags --depth=1 origin $env:OTZARIA_A11Y_SOURCE
 git -C "$source" checkout --detach FETCH_HEAD
 if ((git -C "$source" rev-parse HEAD) -ne $env:OTZARIA_A11Y_SOURCE) {
@@ -58,7 +58,7 @@ Push-Location $source
 try {
     # Use Windows-only dependencies and keep the source repository unmanaged.
     $gclient = Get-Content engine/scripts/standard.gclient -Raw
-    $gclient = $gclient.Replace('https://github.com/flutter/flutter.git', 'https://github.com/palmoni5/flutter.git')
+    $gclient = $gclient.Replace('https://github.com/flutter/flutter.git', 'https://github.com/Y-PLONI/flutter.git')
     $gclient = $gclient.Replace('"custom_deps": {},', @'
 "custom_deps": {},
     "custom_vars": {
