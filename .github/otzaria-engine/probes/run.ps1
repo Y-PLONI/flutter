@@ -44,14 +44,32 @@ try {
 finally { Pop-Location }
 $releaseDir = Join-Path $probe "build/windows/$arch/runner/Release"
 $probeHash = (Get-FileHash (Join-Path $releaseDir 'data/app.so')).Hash.ToLowerInvariant()
+$baselineDir = Join-Path $env:OTZARIA_BUILD_ROOT 'baseline'
+$baselineDll = Join-Path $baselineDir 'flutter_windows.dll'
 $zipName = "flutter_windows-windows-$arch-release.zip"
+if (-not (Test-Path $baselineDll)) {
+    $baselineHash = @{
+        'x64' = '47600fb0bab510e6adebdaca117fdcaf7cabf67fb91d768a373276315a1305a3'
+        'arm64' = '5b12b1e6f66f3b8220ac1e14b95a359edbe43cdb869557b986e2dd65ca8f3569'
+    }[$arch]
+    $baselineZip = Join-Path $env:OTZARIA_BUILD_ROOT "a11y-$zipName"
+    $baselineUrl = "https://github.com/Y-PLONI/flutter/releases/download/otzaria-3.47.9-a11y.1/$zipName"
+    Invoke-WebRequest $baselineUrl -OutFile $baselineZip
+    if ((Get-FileHash $baselineZip).Hash -ne $baselineHash) {
+        throw "Unexpected accessibility release SHA256 for $zipName"
+    }
+    Expand-Archive -LiteralPath $baselineZip -DestinationPath $baselineDir
+}
 $hashes = [ordered]@{ appSnapshotSha256 = $probeHash }
+$variants = @('skia-style', 'both')
 
-foreach ($variant in 'stock', 'a11y', 'windows-numpad') {
+foreach ($variant in (@('stock', 'a11y') + $variants)) {
     $output = Join-Path $env:OTZARIA_BUILD_ROOT "probe-$variant"
     Copy-Item $releaseDir -Destination $output -Recurse
     $dll = Join-Path $output 'flutter_windows.dll'
-    if ($variant -ne 'stock') {
+    if ($variant -eq 'a11y') {
+        Copy-Item $baselineDll -Destination $dll -Force
+    } elseif ($variant -ne 'stock') {
         $zip = Join-Path $buildArtifact "$variant/$zipName"
         $expanded = Join-Path $env:OTZARIA_BUILD_ROOT "probe-engine-$variant"
         Expand-Archive -LiteralPath $zip -DestinationPath $expanded
@@ -61,7 +79,11 @@ foreach ($variant in 'stock', 'a11y', 'windows-numpad') {
 
     $exe = Join-Path $output 'paragraph_probe.exe'
     $report = Join-Path $artifact "$variant.json"
-    $process = Start-Process $exe -WorkingDirectory $output -ArgumentList ('"{0}"' -f $report) -PassThru
+    $arguments = '"{0}"' -f $report
+    if ($variant -in $variants) {
+        $arguments += ' --large'
+    }
+    $process = Start-Process $exe -WorkingDirectory $output -ArgumentList $arguments -PassThru
     if (-not $process.WaitForExit(600000)) {
         $process.Kill()
         throw "Paragraph probe timed out with $variant"
@@ -71,8 +93,27 @@ foreach ($variant in 'stock', 'a11y', 'windows-numpad') {
     }
 }
 $hashes | ConvertTo-Json | Set-Content (Join-Path $artifact 'sha256.json')
-foreach ($variant in 'a11y', 'windows-numpad') {
-    python (Join-Path $PSScriptRoot 'compare_paragraph_style_lookup.py') (Join-Path $artifact 'stock.json') (Join-Path $artifact "$variant.json") 2>&1 |
+python (Join-Path $PSScriptRoot 'compare_paragraph_style_lookup.py') (Join-Path $artifact 'stock.json') (Join-Path $artifact 'a11y.json') 2>&1 |
+    Tee-Object -FilePath (Join-Path $artifact 'a11y-comparison.log')
+if ($LASTEXITCODE -ne 0) { throw 'Accessibility baseline differs from official engine geometry' }
+foreach ($variant in $variants) {
+    python (Join-Path $PSScriptRoot 'compare_paragraph_style_lookup.py') (Join-Path $artifact 'a11y.json') (Join-Path $artifact "$variant.json") 2>&1 |
         Tee-Object -FilePath (Join-Path $artifact "$variant-comparison.log")
-    if ($LASTEXITCODE -ne 0) { throw "Paragraph geometry of $variant differs from the official engine" }
+    if ($LASTEXITCODE -ne 0) { throw "Paragraph geometry of $variant differs from accessibility baseline" }
+}
+
+# Confirm that both large paragraph scenarios ran on each patched engine.
+foreach ($variant in $variants) {
+    $report = Get-Content (Join-Path $artifact "$variant.json") -Raw | ConvertFrom-Json
+    if ($report.large.characters -ne 1985804 -or $report.large.lineCount -lt 1 -or $report.large.layoutMicros -lt 1) {
+        throw "Missing or incomplete large mixed-style paragraph evidence for $variant"
+    }
+    $singleRun = $report.largeSingleRun
+    if ($singleRun.characters -ne 1985800 -or $singleRun.lineCount -lt 1 -or
+        $singleRun.layoutMicros -lt 1 -or $singleRun.widthRelayoutLineCount -lt 1 -or
+        $singleRun.widthRelayoutMicros -lt 1) {
+        throw "Missing or incomplete large justified paragraph evidence for $variant"
+    }
+    Write-Output "$variant large mixed paragraph ($($report.large.characters) characters): $($report.large.layoutMicros) us"
+    Write-Output "$variant large justified paragraph ($($singleRun.characters) characters): $($singleRun.layoutMicros) us; width re-layout $($singleRun.widthRelayoutMicros) us"
 }

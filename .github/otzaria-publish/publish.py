@@ -27,13 +27,13 @@ ARCHITECTURES = ("x64", "arm64")
 FLUTTER_VERSION = "3.47.9"
 FLUTTER_COMMIT = "c197ca5199e9ee5661e865596c9c07294dfab51c"
 VARIANTS = {
-    "a11y": {
-        "title": "accessibility fixes",
-        "patches": (),
+    "skia-style": {
+        "title": "Skia paragraph layout fixes",
+        "patches": ("skia-style",),
     },
-    "windows-numpad": {
-        "title": "Windows numpad navigation",
-        "patches": ("windows-numpad",),
+    "both": {
+        "title": "Skia paragraph layout and Windows numpad navigation",
+        "patches": ("skia-style", "windows-numpad"),
     },
 }
 A11Y_SOURCE = "e86b9d824eeade0a241ce91bb877fdd0d1da3941"
@@ -41,6 +41,7 @@ ENGINE_VERSION = "89c39edfdfae2949f6806e4a315c0c08522238b7"
 SKIA_VERSION = "8df24be66531469e576a806749a0202ae26b8d08"
 PATCH_SHA256 = {
     "windows-numpad": "544bd5c5799b8227636c3e4b53f36ff184f334003cf09b2552f8a54ff88b4a57",
+    "skia-style": "02b37d56b7ab6e82814f22d0b7653908f65f836077bfa22ccfe540c94c88debb",
 }
 A11Y_COMMITS = (
     ("b207278eda", "Keep AccessibilityBridge usable after nested reparenting (flutter/flutter#175041)"),
@@ -103,7 +104,9 @@ def prepare_asset(outer, directory, arch, variant, run):
         "variant": variant,
         "architecture": arch,
         "runtimeMode": "release",
+        "sourceRepository": "https://github.com/Y-PLONI/flutter",
         "sourceCommit": A11Y_SOURCE,
+        "dartCommit": "416e33b0ffaef062a60ec966bb8c82ed2b83f128",
         "compatibilityEngineVersion": ENGINE_VERSION,
         "skiaCommit": SKIA_VERSION,
         "patchSha256": patch_hashes,
@@ -196,7 +199,6 @@ def load_verified_build(request):
         job["name"]: job
         for job in api(f"actions/runs/{run_id}/jobs?per_page=100")["jobs"]
     }
-    probe_failure = "Run paragraph validation against the same release application"
     for arch in ARCHITECTURES:
         job = jobs[f"Windows engine ({arch})"]
         steps = {step["name"]: step["conclusion"] for step in job["steps"]}
@@ -208,9 +210,7 @@ def load_verified_build(request):
             if steps.get(required) != "success":
                 raise ValueError(f"The {arch} build did not pass {required}")
         failures = {name for name, result in steps.items() if result == "failure"}
-        if job["conclusion"] != "success" and (
-            arch != "x64" or job["conclusion"] != "failure" or failures != {probe_failure}
-        ):
+        if job["conclusion"] != "success" or failures:
             raise ValueError(f"The {arch} build did not finish successfully: {failures}")
 
     artifacts = {
