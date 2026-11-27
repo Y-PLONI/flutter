@@ -1,7 +1,7 @@
 {
-  "validationRunId": 45898815504,
+  "validationRunId": 45930116739,
   "tags": {
-    "a11y": "otzaria-3.47.9-a11y.1",
-    "windows-numpad": "otzaria-3.47.9-a11y-numpad.1"
+    "skia-style": "otzaria-3.47.9-a11y-skia.1",
+    "both": "otzaria-3.47.9-a11y-skia-numpad.1"
   }
 }
