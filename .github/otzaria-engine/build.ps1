@@ -5,6 +5,7 @@ $source = $env:OTZARIA_FLUTTER_SOURCE
 $arch = $env:OTZARIA_ARCH
 $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'engine-artifacts'
 $engineSrc = Join-Path $source 'engine/src'
+$skia = Join-Path $engineSrc 'flutter/third_party/skia'
 $ninja = Join-Path $source 'third_party/ninja/ninja.exe'
 $clangTools = Join-Path $engineSrc 'flutter/buildtools/windows-x64/clang/bin'
 $readobj = Join-Path $clangTools 'llvm-readobj.exe'
@@ -13,6 +14,7 @@ $outDir = Join-Path $engineSrc $buildDir
 $engineArg = "--gn-args=engine_version=""$env:OTZARIA_ENGINE_VERSION"""
 $patches = @{
     'windows-numpad' = Join-Path $PSScriptRoot 'patches/windows-numpad.patch'
+    'skia-style' = Join-Path $PSScriptRoot 'patches/skia-style.patch'
 }
 $zipName = "flutter_windows-windows-$arch-release.zip"
 # The official engine of the same revision is the export baseline: the fixes must not change the ABI.
@@ -39,8 +41,10 @@ $baselineExports | Set-Content (Join-Path $artifactDir 'baseline-exports.txt')
 $clangVersion = & (Join-Path $clangTools 'clang-cl.exe') --version
 $clangVersion | Set-Content (Join-Path $artifactDir 'clang-version.txt')
 
-# Validate the patch before spending time compiling.
+# Validate both independent patches before spending time compiling.
 git -C $source apply --check $patches['windows-numpad']
+git -C $skia apply --check $patches['skia-style']
+git -C $skia apply $patches['skia-style']
 Push-Location $engineSrc
 try {
     python flutter/tools/gn --runtime-mode release --no-lto --no-goma --no-rbe "--windows-cpu=$arch" $engineArg 2>&1 |
@@ -51,13 +55,11 @@ try {
     }
     Copy-Item $argsGn $artifactDir
 
-    foreach ($variant in 'a11y', 'windows-numpad') {
-        switch ($variant) {
-            'a11y' { $applied = @() }
-            'windows-numpad' {
-                git -C $source apply $patches['windows-numpad']
-                $applied = @('windows-numpad')
-            }
+    foreach ($variant in 'skia-style', 'both') {
+        $applied = @('skia-style')
+        if ($variant -eq 'both') {
+            git -C $source apply $patches['windows-numpad']
+            $applied += 'windows-numpad'
         }
         & $ninja -C $buildDir -j 3 flutter_windows 2>&1 |
             Tee-Object -FilePath (Join-Path $artifactDir "$variant-build.log")
@@ -93,7 +95,7 @@ try {
             variant = $variant
             architecture = $arch
             runtimeMode = 'release'
-            sourceRepository = 'https://github.com/palmoni5/flutter'
+            sourceRepository = 'https://github.com/Y-PLONI/flutter'
             sourceCommit = $env:OTZARIA_A11Y_SOURCE
             compatibilityEngineVersion = $env:OTZARIA_ENGINE_VERSION
             skiaCommit = $env:OTZARIA_SKIA_VERSION
